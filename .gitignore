@@ -1,0 +1,29 @@
+# Go
+bin/
+coverage.out
+
+# React
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Env
+.env
+
+# Logs
+*.log
+
+# Uploads
+backend/uploads/*
+
+# Coverage
+coverage/
+
+# Temporary
+tmp/
