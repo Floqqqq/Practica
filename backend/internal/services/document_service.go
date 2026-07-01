@@ -26,6 +26,7 @@ var ErrInvalidFile = errors.New("invalid file")
 type DocumentService struct {
 	uploadDir string
 	parser    *ParserService
+	chunker   *ChunkService
 }
 
 type UploadResult struct {
@@ -34,12 +35,14 @@ type UploadResult struct {
 	FileName           string `json:"file_name"`
 	FilePath           string `json:"file_path,omitempty"`
 	TextPath           string `json:"text_path,omitempty"`
+	ChunksPath         string `json:"chunks_path,omitempty"`
 	Size               int64  `json:"size"`
 	Status             string `json:"status"`
 	Message            string `json:"message"`
 	ContentHash        string `json:"content_hash"`
 	PagesCount         int    `json:"pages_count"`
 	ExtractedChars     int    `json:"extracted_chars"`
+	ChunksCount        int    `json:"chunks_count"`
 	TextPreview        string `json:"text_preview,omitempty"`
 	Duplicate          bool   `json:"duplicate"`
 }
@@ -48,6 +51,7 @@ func NewDocumentService(uploadDir string) *DocumentService {
 	return &DocumentService{
 		uploadDir: uploadDir,
 		parser:    NewParserService(),
+		chunker:   NewChunkService(),
 	}
 }
 
@@ -69,6 +73,7 @@ func (s *DocumentService) Upload(
 
 	originalsDir := filepath.Join(s.uploadDir, "originals")
 	extractedDir := filepath.Join(s.uploadDir, "extracted")
+	chunksDir := filepath.Join(s.uploadDir, "chunks")
 
 	savedFileName := fmt.Sprintf("%s_%s", documentID, safeFileName)
 	savedPath := filepath.Join(originalsDir, savedFileName)
@@ -92,10 +97,11 @@ func (s *DocumentService) Upload(
 			FileName:           safeFileName,
 			Size:               writtenBytes,
 			Status:             "duplicate",
-			Message:            "file already uploaded; extraction skipped",
+			Message:            "file already uploaded; extraction and chunking skipped",
 			ContentHash:        contentHash,
 			PagesCount:         duplicatedDocument.PagesCount,
 			ExtractedChars:     duplicatedDocument.ExtractedChars,
+			ChunksCount:        duplicatedDocument.ChunksCount,
 			TextPreview:        duplicatedDocument.TextPreview,
 			Duplicate:          true,
 		}, nil
@@ -121,6 +127,21 @@ func (s *DocumentService) Upload(
 		return nil, fmt.Errorf("save extracted text: %w", err)
 	}
 
+	chunks, err := s.chunker.SplitDocumentIntoChunks(documentID, safeFileName, parsedDocument)
+	if err != nil {
+		_ = os.Remove(savedPath)
+		_ = os.Remove(textPath)
+		return nil, fmt.Errorf("%w: failed to split text into chunks: %v", ErrInvalidFile, err)
+	}
+
+	chunksPath := filepath.Join(chunksDir, documentID+".json")
+
+	if err := saveChunks(chunksPath, chunks); err != nil {
+		_ = os.Remove(savedPath)
+		_ = os.Remove(textPath)
+		return nil, fmt.Errorf("save chunks: %w", err)
+	}
+
 	textPreview := makeTextPreview(parsedDocument.Text, 300)
 
 	metadata := models.DocumentMetadata{
@@ -128,11 +149,13 @@ func (s *DocumentService) Upload(
 		FileName:       safeFileName,
 		FilePath:       savedPath,
 		TextPath:       textPath,
+		ChunksPath:     chunksPath,
 		Size:           writtenBytes,
-		Status:         "text_extracted",
+		Status:         "chunked",
 		ContentHash:    contentHash,
 		PagesCount:     parsedDocument.PagesCount,
 		ExtractedChars: parsedDocument.CharsCount,
+		ChunksCount:    len(chunks),
 		TextPreview:    textPreview,
 		UploadedAt:     time.Now(),
 	}
@@ -140,6 +163,7 @@ func (s *DocumentService) Upload(
 	if err := s.saveMetadata(metadata); err != nil {
 		_ = os.Remove(savedPath)
 		_ = os.Remove(textPath)
+		_ = os.Remove(chunksPath)
 		return nil, fmt.Errorf("save document metadata: %w", err)
 	}
 
@@ -148,12 +172,14 @@ func (s *DocumentService) Upload(
 		FileName:       safeFileName,
 		FilePath:       savedPath,
 		TextPath:       textPath,
+		ChunksPath:     chunksPath,
 		Size:           writtenBytes,
-		Status:         "text_extracted",
-		Message:        "file uploaded and text extracted successfully",
+		Status:         "chunked",
+		Message:        "file uploaded, text extracted and split into chunks successfully",
 		ContentHash:    contentHash,
 		PagesCount:     parsedDocument.PagesCount,
 		ExtractedChars: parsedDocument.CharsCount,
+		ChunksCount:    len(chunks),
 		TextPreview:    textPreview,
 		Duplicate:      false,
 	}, nil
@@ -256,11 +282,21 @@ func saveFileWithHash(file multipart.File, destinationPath string) (string, int6
 	return contentHash, writtenBytes, nil
 }
 
+func saveChunks(chunksPath string, chunks []models.Chunk) error {
+	chunksBytes, err := json.MarshalIndent(chunks, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(chunksPath, chunksBytes, 0644)
+}
+
 func (s *DocumentService) prepareUploadDirs() error {
 	dirs := []string{
 		s.uploadDir,
 		filepath.Join(s.uploadDir, "originals"),
 		filepath.Join(s.uploadDir, "extracted"),
+		filepath.Join(s.uploadDir, "chunks"),
 		filepath.Join(s.uploadDir, "metadata"),
 		filepath.Join(s.uploadDir, "metadata", "hash_index"),
 	}
