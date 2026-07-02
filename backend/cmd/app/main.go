@@ -1,29 +1,42 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
-	"os"
+	"time"
 
+	"github.com/Floqqqq/Practica/backend/internal/config"
+	"github.com/Floqqqq/Practica/backend/internal/elastic"
 	httpserver "github.com/Floqqqq/Practica/backend/internal/http"
 )
 
 func main() {
-	port := os.Getenv("APP_PORT")
-	if port == "" {
-		port = "8080"
+	cfg := config.Load()
+
+	elasticClient, err := elastic.NewClient(cfg.ElasticsearchURL)
+	if err != nil {
+		log.Fatalf("failed to create elasticsearch client: %v", err)
 	}
 
-	uploadDir := os.Getenv("UPLOAD_DIR")
-	if uploadDir == "" {
-		uploadDir = "uploads"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := elasticClient.Ping(ctx); err != nil {
+		log.Fatalf("failed to connect to elasticsearch: %v", err)
 	}
 
-	router := httpserver.NewRouter(uploadDir)
+	if err := elasticClient.EnsureDocumentsIndex(ctx); err != nil {
+		log.Fatalf("failed to ensure documents index: %v", err)
+	}
 
-	log.Printf("backend started on port %s", port)
+	router := httpserver.NewRouter(cfg.UploadDir)
 
-	if err := http.ListenAndServe(":"+port, router); err != nil {
+	log.Printf("backend started on port %s", cfg.AppPort)
+	log.Printf("elasticsearch connected: %s", cfg.ElasticsearchURL)
+	log.Printf("documents index is ready: %s", elastic.DocumentsIndexName)
+
+	if err := http.ListenAndServe(":"+cfg.AppPort, router); err != nil {
 		log.Fatalf("failed to start server: %v", err)
 	}
 }
