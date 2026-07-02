@@ -30,32 +30,8 @@ func (s *ChunkService) SplitDocumentIntoChunks(
 	fileName string,
 	parsedDocument *models.ParsedDocument,
 ) ([]models.Chunk, error) {
-	if strings.TrimSpace(documentID) == "" {
-		return nil, errors.New("document id is required")
-	}
-
-	if strings.TrimSpace(fileName) == "" {
-		return nil, errors.New("file name is required")
-	}
-
-	if parsedDocument == nil {
-		return nil, errors.New("parsed document is required")
-	}
-
-	if len(parsedDocument.Pages) == 0 {
-		return nil, errors.New("parsed document has no pages")
-	}
-
-	if s.chunkSize <= 0 {
-		return nil, errors.New("chunk size must be positive")
-	}
-
-	if s.overlap < 0 {
-		return nil, errors.New("chunk overlap cannot be negative")
-	}
-
-	if s.overlap >= s.chunkSize {
-		return nil, errors.New("chunk overlap must be less than chunk size")
+	if err := s.validateSplitRequest(documentID, fileName, parsedDocument); err != nil {
+		return nil, err
 	}
 
 	chunks := make([]models.Chunk, 0)
@@ -67,7 +43,13 @@ func (s *ChunkService) SplitDocumentIntoChunks(
 			continue
 		}
 
-		pageChunks := s.splitPageIntoChunks(documentID, fileName, page.PageNumber, pageText, chunkIndex)
+		pageChunks := s.splitPageIntoChunks(
+			documentID,
+			fileName,
+			page.PageNumber,
+			pageText,
+			chunkIndex,
+		)
 
 		chunks = append(chunks, pageChunks...)
 		chunkIndex += len(pageChunks)
@@ -78,6 +60,42 @@ func (s *ChunkService) SplitDocumentIntoChunks(
 	}
 
 	return chunks, nil
+}
+
+func (s *ChunkService) validateSplitRequest(
+	documentID string,
+	fileName string,
+	parsedDocument *models.ParsedDocument,
+) error {
+	if strings.TrimSpace(documentID) == "" {
+		return errors.New("document id is required")
+	}
+
+	if strings.TrimSpace(fileName) == "" {
+		return errors.New("file name is required")
+	}
+
+	if parsedDocument == nil {
+		return errors.New("parsed document is required")
+	}
+
+	if len(parsedDocument.Pages) == 0 {
+		return errors.New("parsed document has no pages")
+	}
+
+	if s.chunkSize <= 0 {
+		return errors.New("chunk size must be positive")
+	}
+
+	if s.overlap < 0 {
+		return errors.New("chunk overlap cannot be negative")
+	}
+
+	if s.overlap >= s.chunkSize {
+		return errors.New("chunk overlap must be less than chunk size")
+	}
+
+	return nil
 }
 
 func (s *ChunkService) splitPageIntoChunks(
@@ -91,22 +109,19 @@ func (s *ChunkService) splitPageIntoChunks(
 
 	if len(runes) <= s.chunkSize {
 		return []models.Chunk{
-			{
-				ChunkID:     uuid.NewString(),
-				DocumentID:  documentID,
-				FileName:    fileName,
-				PageNumber:  pageNumber,
-				ChunkIndex:  startChunkIndex,
-				Text:        string(runes),
-				StartOffset: 0,
-				EndOffset:   len(runes),
-				CharsCount:  len(runes),
-			},
+			newChunk(
+				documentID,
+				fileName,
+				pageNumber,
+				startChunkIndex,
+				string(runes),
+				0,
+				len(runes),
+			),
 		}
 	}
 
 	step := s.chunkSize - s.overlap
-
 	chunks := make([]models.Chunk, 0)
 	chunkIndex := startChunkIndex
 
@@ -118,17 +133,15 @@ func (s *ChunkService) splitPageIntoChunks(
 
 		chunkText := strings.TrimSpace(string(runes[start:end]))
 		if chunkText != "" {
-			chunks = append(chunks, models.Chunk{
-				ChunkID:     uuid.NewString(),
-				DocumentID:  documentID,
-				FileName:    fileName,
-				PageNumber:  pageNumber,
-				ChunkIndex:  chunkIndex,
-				Text:        chunkText,
-				StartOffset: start,
-				EndOffset:   end,
-				CharsCount:  len([]rune(chunkText)),
-			})
+			chunks = append(chunks, newChunk(
+				documentID,
+				fileName,
+				pageNumber,
+				chunkIndex,
+				chunkText,
+				start,
+				end,
+			))
 
 			chunkIndex++
 		}
@@ -139,4 +152,26 @@ func (s *ChunkService) splitPageIntoChunks(
 	}
 
 	return chunks
+}
+
+func newChunk(
+	documentID string,
+	fileName string,
+	pageNumber int,
+	chunkIndex int,
+	text string,
+	startOffset int,
+	endOffset int,
+) models.Chunk {
+	return models.Chunk{
+		ChunkID:     uuid.NewString(),
+		DocumentID:  documentID,
+		FileName:    fileName,
+		PageNumber:  pageNumber,
+		ChunkIndex:  chunkIndex,
+		Text:        text,
+		StartOffset: startOffset,
+		EndOffset:   endOffset,
+		CharsCount:  len([]rune(text)),
+	}
 }

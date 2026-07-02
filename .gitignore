@@ -21,6 +21,7 @@ dist/
 
 # Uploads
 backend/uploads/*
+!backend/uploads/.gitkeep
 
 # Coverage
 coverage/

@@ -3,7 +3,6 @@ package elastic
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -18,45 +17,15 @@ func (c *Client) SearchChunks(
 	limit int,
 ) (*models.SearchResponse, error) {
 	query = strings.TrimSpace(query)
-
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
 
-	if page < 1 {
-		page = 1
-	}
+	page, limit = normalizeSearchPagination(page, limit)
 
-	if limit < 1 {
-		limit = 10
-	}
-
-	from := (page - 1) * limit
-
-	searchBody := map[string]any{
-		"query": map[string]any{
-			"multi_match": map[string]any{
-				"query":  query,
-				"fields": []string{"text"},
-			},
-		},
-		"from": from,
-		"size": limit,
-		"highlight": map[string]any{
-			"pre_tags":  []string{"<mark>"},
-			"post_tags": []string{"</mark>"},
-			"fields": map[string]any{
-				"text": map[string]any{
-					"fragment_size":       300,
-					"number_of_fragments": 1,
-				},
-			},
-		},
-	}
-
-	bodyBytes, err := json.Marshal(searchBody)
+	bodyBytes, err := buildSearchRequestBody(query, page, limit)
 	if err != nil {
-		return nil, fmt.Errorf("marshal search body: %w", err)
+		return nil, err
 	}
 
 	response, err := c.es.Search(
@@ -78,42 +47,9 @@ func (c *Client) SearchChunks(
 		return nil, fmt.Errorf("search failed: %s: %s", response.Status(), string(responseBody))
 	}
 
-	var elasticResponse struct {
-		Hits struct {
-			Total struct {
-				Value int64 `json:"value"`
-			} `json:"total"`
-			Hits []struct {
-				Score     float64             `json:"_score"`
-				Source    elasticChunkSource  `json:"_source"`
-				Highlight map[string][]string `json:"highlight"`
-			} `json:"hits"`
-		} `json:"hits"`
-	}
-
-	if err := json.Unmarshal(responseBody, &elasticResponse); err != nil {
-		return nil, fmt.Errorf("decode search response: %w", err)
-	}
-
-	results := make([]models.SearchResult, 0, len(elasticResponse.Hits.Hits))
-
-	for _, hit := range elasticResponse.Hits.Hits {
-		highlight := ""
-
-		if fragments, ok := hit.Highlight["text"]; ok && len(fragments) > 0 {
-			highlight = fragments[0]
-		}
-
-		results = append(results, models.SearchResult{
-			ChunkID:    hit.Source.ChunkID,
-			DocumentID: hit.Source.DocumentID,
-			FileName:   hit.Source.FileName,
-			Page:       hit.Source.PageNumber,
-			ChunkIndex: hit.Source.ChunkIndex,
-			Text:       hit.Source.Text,
-			Highlight:  highlight,
-			Score:      hit.Score,
-		})
+	elasticResponse, err := decodeSearchResponse(responseBody)
+	if err != nil {
+		return nil, err
 	}
 
 	return &models.SearchResponse{
@@ -122,18 +58,18 @@ func (c *Client) SearchChunks(
 		Limit:   limit,
 		Total:   elasticResponse.Hits.Total.Value,
 		Cached:  false,
-		Results: results,
+		Results: mapElasticHitsToSearchResults(elasticResponse.Hits.Hits),
 	}, nil
 }
 
-type elasticChunkSource struct {
-	ChunkID     string `json:"chunk_id"`
-	DocumentID  string `json:"document_id"`
-	FileName    string `json:"file_name"`
-	PageNumber  int    `json:"page_number"`
-	ChunkIndex  int    `json:"chunk_index"`
-	Text        string `json:"text"`
-	StartOffset int    `json:"start_offset"`
-	EndOffset   int    `json:"end_offset"`
-	CharsCount  int    `json:"chars_count"`
+func normalizeSearchPagination(page int, limit int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+
+	if limit < 1 {
+		limit = 10
+	}
+
+	return page, limit
 }
