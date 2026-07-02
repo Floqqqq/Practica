@@ -3,16 +3,20 @@ package httpserver
 import (
 	"net/http"
 
+	"github.com/Floqqqq/Practica/backend/internal/elastic"
 	"github.com/Floqqqq/Practica/backend/internal/http/handlers"
 	"github.com/Floqqqq/Practica/backend/internal/services"
 	"github.com/Floqqqq/Practica/backend/pkg/response"
 )
 
-func NewRouter(uploadDir string) http.Handler {
+func NewRouter(uploadDir string, elasticClient *elastic.Client) http.Handler {
 	mux := http.NewServeMux()
 
-	documentService := services.NewDocumentService(uploadDir)
+	documentService := services.NewDocumentService(uploadDir, elasticClient)
 	documentHandler := handlers.NewDocumentHandler(documentService)
+
+	searchService := services.NewSearchService(elasticClient)
+	searchHandler := handlers.NewSearchHandler(searchService)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -26,6 +30,7 @@ func NewRouter(uploadDir string) http.Handler {
 	})
 
 	mux.HandleFunc("/api/v1/documents/upload", documentHandler.UploadDocument)
+	mux.HandleFunc("/api/v1/search", searchHandler.Search)
 
 	return mux
 }

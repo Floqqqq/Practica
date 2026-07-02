@@ -30,7 +30,7 @@ func main() {
 		log.Fatalf("failed to ensure documents index: %v", err)
 	}
 
-	router := httpserver.NewRouter(cfg.UploadDir)
+	router := httpserver.NewRouter(cfg.UploadDir, elasticClient)
 
 	log.Printf("backend started on port %s", cfg.AppPort)
 	log.Printf("elasticsearch connected: %s", cfg.ElasticsearchURL)

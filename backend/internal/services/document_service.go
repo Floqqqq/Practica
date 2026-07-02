@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Floqqqq/Practica/backend/internal/elastic"
 	"github.com/Floqqqq/Practica/backend/internal/models"
 	"github.com/google/uuid"
 )
@@ -24,9 +25,10 @@ const MaxFileSize int64 = 20 * 1024 * 1024
 var ErrInvalidFile = errors.New("invalid file")
 
 type DocumentService struct {
-	uploadDir string
-	parser    *ParserService
-	chunker   *ChunkService
+	uploadDir     string
+	parser        *ParserService
+	chunker       *ChunkService
+	elasticClient *elastic.Client
 }
 
 type UploadResult struct {
@@ -47,11 +49,18 @@ type UploadResult struct {
 	Duplicate          bool   `json:"duplicate"`
 }
 
-func NewDocumentService(uploadDir string) *DocumentService {
+func NewDocumentService(uploadDir string, elasticClients ...*elastic.Client) *DocumentService {
+	var elasticClient *elastic.Client
+
+	if len(elasticClients) > 0 {
+		elasticClient = elasticClients[0]
+	}
+
 	return &DocumentService{
-		uploadDir: uploadDir,
-		parser:    NewParserService(),
-		chunker:   NewChunkService(),
+		uploadDir:     uploadDir,
+		parser:        NewParserService(),
+		chunker:       NewChunkService(),
+		elasticClient: elasticClient,
 	}
 }
 
@@ -97,7 +106,7 @@ func (s *DocumentService) Upload(
 			FileName:           safeFileName,
 			Size:               writtenBytes,
 			Status:             "duplicate",
-			Message:            "file already uploaded; extraction and chunking skipped",
+			Message:            "file already uploaded; extraction, chunking and indexing skipped",
 			ContentHash:        contentHash,
 			PagesCount:         duplicatedDocument.PagesCount,
 			ExtractedChars:     duplicatedDocument.ExtractedChars,
@@ -142,6 +151,21 @@ func (s *DocumentService) Upload(
 		return nil, fmt.Errorf("save chunks: %w", err)
 	}
 
+	documentStatus := "chunked"
+	documentMessage := "file uploaded, text extracted and split into chunks successfully"
+
+	if s.elasticClient != nil {
+		if err := s.elasticClient.IndexChunks(ctx, chunks); err != nil {
+			_ = os.Remove(savedPath)
+			_ = os.Remove(textPath)
+			_ = os.Remove(chunksPath)
+			return nil, fmt.Errorf("index chunks in elasticsearch: %w", err)
+		}
+
+		documentStatus = "indexed"
+		documentMessage = "file uploaded, text extracted, split into chunks and indexed successfully"
+	}
+
 	textPreview := makeTextPreview(parsedDocument.Text, 300)
 
 	metadata := models.DocumentMetadata{
@@ -151,7 +175,7 @@ func (s *DocumentService) Upload(
 		TextPath:       textPath,
 		ChunksPath:     chunksPath,
 		Size:           writtenBytes,
-		Status:         "chunked",
+		Status:         documentStatus,
 		ContentHash:    contentHash,
 		PagesCount:     parsedDocument.PagesCount,
 		ExtractedChars: parsedDocument.CharsCount,
@@ -174,8 +198,8 @@ func (s *DocumentService) Upload(
 		TextPath:       textPath,
 		ChunksPath:     chunksPath,
 		Size:           writtenBytes,
-		Status:         "chunked",
-		Message:        "file uploaded, text extracted and split into chunks successfully",
+		Status:         documentStatus,
+		Message:        documentMessage,
 		ContentHash:    contentHash,
 		PagesCount:     parsedDocument.PagesCount,
 		ExtractedChars: parsedDocument.CharsCount,
