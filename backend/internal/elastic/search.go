@@ -121,6 +121,7 @@ func (c *Client) SearchChunks(
 		Page:    page,
 		Limit:   limit,
 		Total:   elasticResponse.Hits.Total.Value,
+		Cached:  false,
 		Results: results,
 	}, nil
 }

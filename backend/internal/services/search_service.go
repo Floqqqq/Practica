@@ -13,11 +13,16 @@ var ErrInvalidSearchQuery = errors.New("invalid search query")
 
 type SearchService struct {
 	elasticClient *elastic.Client
+	cacheService  *CacheService
 }
 
-func NewSearchService(elasticClient *elastic.Client) *SearchService {
+func NewSearchService(
+	elasticClient *elastic.Client,
+	cacheService *CacheService,
+) *SearchService {
 	return &SearchService{
 		elasticClient: elasticClient,
+		cacheService:  cacheService,
 	}
 }
 
@@ -45,5 +50,32 @@ func (s *SearchService) Search(
 		limit = 50
 	}
 
-	return s.elasticClient.SearchChunks(ctx, query, page, limit)
+	if s.cacheService != nil && s.cacheService.Enabled() {
+		cacheKey := s.cacheService.BuildSearchCacheKey(query, page, limit)
+
+		cachedResponse, found, err := s.cacheService.GetSearchResponse(ctx, cacheKey)
+		if err == nil && found {
+			return cachedResponse, nil
+		}
+
+		searchResponse, err := s.elasticClient.SearchChunks(ctx, query, page, limit)
+		if err != nil {
+			return nil, err
+		}
+
+		searchResponse.Cached = false
+
+		_ = s.cacheService.SetSearchResponse(ctx, cacheKey, searchResponse)
+
+		return searchResponse, nil
+	}
+
+	searchResponse, err := s.elasticClient.SearchChunks(ctx, query, page, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	searchResponse.Cached = false
+
+	return searchResponse, nil
 }

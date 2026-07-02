@@ -1,0 +1,241 @@
+openapi: 3.0.3
+
+info:
+  title: Practice Knowledge Base Search API
+  version: 1.0.0
+  description: API интеллектуальной поисковой системы по внутренней базе знаний университета.
+
+servers:
+  - url: http://localhost:8080
+    description: Local backend server
+
+paths:
+  /health:
+    get:
+      summary: Проверка состояния backend
+      responses:
+        "200":
+          description: Backend работает
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "405":
+          description: Неверный HTTP-метод
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/documents/upload:
+    post:
+      summary: Загрузка документа
+      description: Загружает PDF или DOCX документ, валидирует его, извлекает текст, разбивает текст на чанки и индексирует их в Elasticsearch.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF или DOCX файл размером не более 20 МБ
+      responses:
+        "200":
+          description: Документ успешно загружен и обработан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResponse"
+        "400":
+          description: Ошибка валидации файла
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/search:
+    get:
+      summary: Поиск по документам
+      description: Выполняет полнотекстовый поиск по чанкам документов в Elasticsearch. Повторные запросы кешируются в Redis на 5 минут.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Поисковый запрос
+          schema:
+            type: string
+            example: Elasticsearch
+        - name: page
+          in: query
+          required: false
+          description: Номер страницы результатов
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: limit
+          in: query
+          required: false
+          description: Количество результатов на странице
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          description: Результаты поиска
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Не передан обязательный параметр q
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: validation_error
+        message:
+          type: string
+          example: query parameter q is required
+
+    UploadResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 756275ba-51f1-4cc5-b3bd-a6ee54b4a74e
+        original_document_id:
+          type: string
+          nullable: true
+          example: 756275ba-51f1-4cc5-b3bd-a6ee54b4a74e
+        file_name:
+          type: string
+          example: lecture.docx
+        file_path:
+          type: string
+          example: uploads/originals/uuid_lecture.docx
+        text_path:
+          type: string
+          example: uploads/extracted/uuid.txt
+        chunks_path:
+          type: string
+          example: uploads/chunks/uuid.json
+        size:
+          type: integer
+          example: 1087
+        status:
+          type: string
+          example: indexed
+        message:
+          type: string
+          example: file uploaded, text extracted, split into chunks and indexed successfully
+        content_hash:
+          type: string
+          example: 4693d72d9ee9a92fc55aade172a0e0d2d5cc87ae8b405a4768d97cf999014f30
+        pages_count:
+          type: integer
+          example: 1
+        extracted_chars:
+          type: integer
+          example: 129
+        chunks_count:
+          type: integer
+          example: 1
+        text_preview:
+          type: string
+          example: Это тестовый документ для проверки загрузки...
+        duplicate:
+          type: boolean
+          example: false
+
+    SearchResponse:
+      type: object
+      properties:
+        query:
+          type: string
+          example: Elasticsearch
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 10
+        total:
+          type: integer
+          example: 1
+        cached:
+          type: boolean
+          example: false
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+
+    SearchResult:
+      type: object
+      required:
+        - chunk_id
+        - file_name
+        - page
+        - text
+        - score
+      properties:
+        chunk_id:
+          type: string
+          example: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+        document_id:
+          type: string
+          example: 756275ba-51f1-4cc5-b3bd-a6ee54b4a74e
+        file_name:
+          type: string
+          example: lecture.docx
+        page:
+          type: integer
+          example: 1
+        chunk_index:
+          type: integer
+          example: 0
+        text:
+          type: string
+          example: Elasticsearch используется для полнотекстового поиска.
+        highlight:
+          type: string
+          example: <mark>Elasticsearch</mark> используется для полнотекстового поиска.
+        score:
+          type: number
+          format: double
+          example: 0.2876821
